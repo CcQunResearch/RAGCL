@@ -8,6 +8,26 @@
 import json
 import os
 import shutil
+import jieba
+import nltk
+
+# nltk.download('punkt')
+from nltk.tokenize import MWETokenizer
+
+mwe_tokenizer = MWETokenizer([('<', '@', 'user', '>'), ('<', 'url', '>')], separator='')
+
+
+def word_tokenizer(sentence, lang='en', mode='naive'):
+    if lang == 'en':
+        if mode == 'nltk':
+            return mwe_tokenizer.tokenize(nltk.word_tokenize(sentence))
+        elif mode == 'naive':
+            return sentence.split()
+    if lang == 'ch':
+        if mode == 'jieba':
+            return jieba.lcut(sentence)
+        elif mode == 'naive':
+            return sentence
 
 
 def write_json(dict, path):
@@ -46,10 +66,13 @@ def create_log_dict_pretrain(args):
     log_dict = {}
     log_dict['dataset'] = args.dataset
     log_dict['unsup dataset'] = args.unsup_dataset
+    log_dict['tokenize mode'] = args.tokenize_mode
+
     log_dict['unsup train size'] = args.unsup_train_size
     log_dict['runs'] = args.runs
-
     log_dict['batch size'] = args.batch_size
+    log_dict['undirected'] = args.undirected
+    log_dict['model'] = args.model
     log_dict['n layers feat'] = args.n_layers_feat
     log_dict['n layers conv'] = args.n_layers_conv
     log_dict['n layers fc'] = args.n_layers_fc
@@ -79,11 +102,14 @@ def create_log_dict_semisup(args):
     log_dict = {}
     log_dict['dataset'] = args.dataset
     log_dict['unsup dataset'] = args.unsup_dataset
+    log_dict['tokenize mode'] = args.tokenize_mode
+
     log_dict['unsup train size'] = args.unsup_train_size
     log_dict['runs'] = args.runs
-
     log_dict['batch size'] = args.batch_size
     log_dict['unsup_bs_ratio'] = args.unsup_bs_ratio
+    log_dict['undirected'] = args.undirected
+    log_dict['model'] = args.model
     log_dict['n layers feat'] = args.n_layers_feat
     log_dict['n layers conv'] = args.n_layers_conv
     log_dict['n layers fc'] = args.n_layers_fc
@@ -114,10 +140,12 @@ def create_log_dict_sup(args):
     log_dict = {}
     log_dict['dataset'] = args.dataset
     log_dict['unsup train size'] = args.unsup_train_size
-    log_dict['runs'] = args.runs
+    log_dict['tokenize mode'] = args.tokenize_mode
 
+    log_dict['runs'] = args.runs
     log_dict['batch size'] = args.batch_size
-    log_dict['unsup_bs_ratio'] = args.unsup_bs_ratio
+    log_dict['undirected'] = args.undirected
+    log_dict['model'] = args.model
     log_dict['n layers feat'] = args.n_layers_feat
     log_dict['n layers conv'] = args.n_layers_conv
     log_dict['n layers fc'] = args.n_layers_fc

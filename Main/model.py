@@ -10,11 +10,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear, BatchNorm1d, Parameter
-from torch_scatter import scatter_add
+from torch_scatter import scatter_add, scatter_mean
 from torch_geometric.nn import global_mean_pool, global_add_pool
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import remove_self_loops, add_self_loops
 from torch_geometric.nn.inits import glorot, zeros
+import numpy as np
+import random
+import copy
 
 
 class GCNConv(MessagePassing):
@@ -142,12 +145,13 @@ class GCNConv(MessagePassing):
 class ResGCN(torch.nn.Module):
     """GCN with BN and residual connection."""
 
-    def __init__(self, dataset=None, hidden=128, num_feat_layers=1, num_conv_layers=3,
+    def __init__(self, dataset=None, num_classes=2, hidden=128, num_feat_layers=1, num_conv_layers=3,
                  num_fc_layers=2, gfn=False, collapse=False, residual=False,
                  res_branch="BNConvReLU", global_pool="sum", dropout=0,
                  edge_norm=True):
         super(ResGCN, self).__init__()
         assert num_feat_layers == 1, "more feat layers are not now supported"
+        self.num_classes = num_classes
         self.conv_residual = residual
         self.fc_residual = False  # no skip-connections for fc layers.
         self.res_branch = res_branch
@@ -160,14 +164,13 @@ class ResGCN(torch.nn.Module):
         self.dropout = dropout
         GConv = partial(GCNConv, edge_norm=edge_norm, gfn=gfn)
 
+        self.use_xg = False
         if "xg" in dataset[0]:  # Utilize graph level features.
             self.use_xg = True
             self.bn1_xg = BatchNorm1d(dataset[0].xg.size(1))
             self.lin1_xg = Linear(dataset[0].xg.size(1), hidden)
             self.bn2_xg = BatchNorm1d(hidden)
             self.lin2_xg = Linear(hidden, hidden)
-        else:
-            self.use_xg = False
 
         hidden_in = dataset.num_features
         if collapse:
@@ -186,7 +189,7 @@ class ResGCN(torch.nn.Module):
                 self.bns_fc.append(BatchNorm1d(hidden_in))
                 self.lins.append(Linear(hidden_in, hidden))
                 hidden_in = hidden
-            self.lin_class = Linear(hidden_in, dataset.num_classes)
+            self.lin_class = Linear(hidden_in, self.num_classes)
         else:
             self.bn_feat = BatchNorm1d(hidden_in)
             feat_gfn = True  # set true so GCNConv is feat transform
@@ -219,7 +222,7 @@ class ResGCN(torch.nn.Module):
             for i in range(num_fc_layers - 1):
                 self.bns_fc.append(BatchNorm1d(hidden))
                 self.lins.append(Linear(hidden, hidden))
-            self.lin_class = Linear(hidden, 1)
+            self.lin_class = Linear(hidden, self.num_classes)
 
         # BN initialization.
         for m in self.modules():
@@ -266,7 +269,7 @@ class ResGCN(torch.nn.Module):
             x_ = F.relu(lin(x_))
             x = x + x_ if self.fc_residual else x_
         x = self.lin_class(x)
-        return torch.sigmoid(x).view(-1)
+        return F.log_softmax(x, dim=-1)
 
     def forward_BNConvReLU(self, x, edge_index, batch, xg=None):
         x = self.bn_feat(x)
@@ -286,7 +289,7 @@ class ResGCN(torch.nn.Module):
         if self.dropout > 0:
             x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.lin_class(x)
-        return torch.sigmoid(x).view(-1)
+        return F.log_softmax(x, dim=-1)
 
     def forward_BNReLUConv(self, x, edge_index, batch, xg=None):
         x = self.bn_feat(x)
@@ -305,7 +308,7 @@ class ResGCN(torch.nn.Module):
         if self.dropout > 0:
             x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.lin_class(x)
-        return torch.sigmoid(x).view(-1)
+        return F.log_softmax(x, dim=-1)
 
     def forward_ConvReLUBN(self, x, edge_index, batch, xg=None):
         x = self.bn_feat(x)
@@ -324,7 +327,7 @@ class ResGCN(torch.nn.Module):
         if self.dropout > 0:
             x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.lin_class(x)
-        return torch.sigmoid(x).view(-1)
+        return F.log_softmax(x, dim=-1)
 
     def forward_resnet(self, x, edge_index, batch, xg=None):
         # this mimics resnet architecture in cv.
@@ -349,7 +352,7 @@ class ResGCN(torch.nn.Module):
         if self.dropout > 0:
             x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.lin_class(x)
-        return torch.sigmoid(x).view(-1)
+        return F.log_softmax(x, dim=-1)
 
     def __repr__(self):
         return self.__class__.__name__
@@ -407,6 +410,39 @@ class ResGCN_graphcl(ResGCN):
             loss = loss.mean()
         return loss
 
+    def contrastive_loss(self, x, y, device):
+        self.t = 0.3
+        self.nrlabel = 0
+
+        dot_matrix = torch.mm(x, x.t())  # [bs, bs]
+        x_norm = torch.norm(x, p=2, dim=1)  # [bs]
+        x_norm = x_norm.unsqueeze(1)  # [bs, 1])
+        norm_matrix = torch.mm(x_norm, x_norm.t())  # [bs, bs]
+
+        cos_matrix = (dot_matrix / norm_matrix) / self.t  # [bs, bs]
+        cos_matrix = torch.exp(cos_matrix)  # [bs, bs]
+        cos_matrix = cos_matrix - torch.diag_embed(torch.diag(cos_matrix))  # [bs, bs]
+
+        y_matrix = y.expand(len(y), len(y))  # [bs, bs]
+        neg_indices = torch.ne(y_matrix.t(), y_matrix).float()  # [bs, bs]
+        neg_matrix = cos_matrix * neg_indices  # [bs, bs]
+        sum_neg_vector = (torch.sum(neg_matrix, dim=1)).unsqueeze(1)  # [bs, 1]
+
+        y_matrix_mask_nrlabel = torch.where(y_matrix != self.nrlabel, y_matrix,
+                                            torch.ones(len(y), len(y)).long().to(device) * 100).to(device)  # [bs, bs]
+        pos_indices = torch.eq(y_matrix.t(), y_matrix_mask_nrlabel).float()  # [bs, bs]
+        pos_matrix = cos_matrix * pos_indices  # [bs, bs]
+
+        nrmask = torch.where(y != self.nrlabel, torch.ones(len(y)).bool().to(device), torch.zeros(len(y)).bool().to(device)).to(device)  # [bs]
+
+        div = pos_matrix / sum_neg_vector  # [bs, bs]
+        div = (torch.sum(div, dim=1)[nrmask]).unsqueeze(1)  # [bs, 1]
+        div = div / len(y)  # [bs, 1]
+        loss = -torch.sum(torch.log(div))
+        return loss
+
+
+######################################################
 
 class vgae_encoder(ResGCN):
     def __init__(self, **kargs):
@@ -516,3 +552,131 @@ class vgae(torch.nn.Module):
         prob[list(range(x.shape[0])), list(range(x.shape[0]))] = 0
         prob = torch.einsum('nm,n->nm', prob, 1 / prob.sum(dim=1))
         return prob
+
+
+######################################################
+
+
+class TDrumorGCN(torch.nn.Module):
+    def __init__(self, in_feats, hid_feats, out_feats, tddroprate):
+        super(TDrumorGCN, self).__init__()
+        self.tddroprate = tddroprate
+        self.conv1 = GCNConv(in_feats, hid_feats)
+        self.conv2 = GCNConv(hid_feats + in_feats, out_feats)
+
+    def forward(self, data):
+        device = data.x.device
+        x, edge_index = data.x, data.edge_index
+
+        edge_index_list = edge_index.tolist()
+        if self.tddroprate > 0:
+            length = len(edge_index_list[0])
+            poslist = random.sample(range(length), int(length * (1 - self.tddroprate)))
+            poslist = sorted(poslist)
+            tdrow = list(np.array(edge_index_list[0])[poslist])
+            tdcol = list(np.array(edge_index_list[1])[poslist])
+            edge_index = torch.LongTensor([tdrow, tdcol]).to(device)
+
+        x1 = copy.copy(x.float())
+        x = self.conv1(x, edge_index)
+        x2 = copy.copy(x)
+        root_extend = torch.zeros(len(data.batch), x1.size(1)).to(device)
+        batch_size = max(data.batch) + 1
+        for num_batch in range(batch_size):
+            index = (torch.eq(data.batch, num_batch))
+            root_extend[index] = x1[index][0]
+        x = torch.cat((x, root_extend), 1)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        root_extend = torch.zeros(len(data.batch), x2.size(1)).to(device)
+        for num_batch in range(batch_size):
+            index = (torch.eq(data.batch, num_batch))
+            root_extend[index] = x2[index][0]
+        x = torch.cat((x, root_extend), 1)
+        x = scatter_mean(x, data.batch, dim=0)
+        return x
+
+
+class BUrumorGCN(torch.nn.Module):
+    def __init__(self, in_feats, hid_feats, out_feats, budroprate):
+        super(BUrumorGCN, self).__init__()
+        self.budroprate = budroprate
+        self.conv1 = GCNConv(in_feats, hid_feats)
+        self.conv2 = GCNConv(hid_feats + in_feats, out_feats)
+
+    def forward(self, data):
+        device = data.x.device
+        x = data.x
+        edge_index = data.edge_index.clone()
+        edge_index[0], edge_index[1] = data.edge_index[1], data.edge_index[0]
+
+        edge_index_list = edge_index.tolist()
+        if self.budroprate > 0:
+            length = len(edge_index_list[0])
+            poslist = random.sample(range(length), int(length * (1 - self.budroprate)))
+            poslist = sorted(poslist)
+            burow = list(np.array(edge_index_list[0])[poslist])
+            bucol = list(np.array(edge_index_list[1])[poslist])
+            edge_index = torch.LongTensor([burow, bucol]).to(device)
+
+        x1 = copy.copy(x.float())
+        x = self.conv1(x, edge_index)
+        x2 = copy.copy(x)
+        root_extend = torch.zeros(len(data.batch), x1.size(1)).to(device)
+        batch_size = max(data.batch) + 1
+        for num_batch in range(batch_size):
+            index = (torch.eq(data.batch, num_batch))
+            root_extend[index] = x1[index][0]
+        x = torch.cat((x, root_extend), 1)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        root_extend = torch.zeros(len(data.batch), x2.size(1)).to(device)
+        for num_batch in range(batch_size):
+            index = (torch.eq(data.batch, num_batch))
+            root_extend[index] = x2[index][0]
+        x = torch.cat((x, root_extend), 1)
+        x = scatter_mean(x, data.batch, dim=0)
+        return x
+
+
+class BiGCN_graphcl(torch.nn.Module):
+    def __init__(self, in_feats, hid_feats, out_feats, num_classes, tddroprate=0.0, budroprate=0.0):
+        super(BiGCN_graphcl, self).__init__()
+        self.TDrumorGCN = TDrumorGCN(in_feats, hid_feats, out_feats, tddroprate)
+        self.BUrumorGCN = BUrumorGCN(in_feats, hid_feats, out_feats, budroprate)
+        self.proj_head = torch.nn.Linear((out_feats + hid_feats) * 2, out_feats)
+        self.fc = torch.nn.Linear((out_feats + hid_feats) * 2, num_classes)
+
+    def forward(self, data):
+        TD_x = self.TDrumorGCN(data)
+        BU_x = self.BUrumorGCN(data)
+        x = torch.cat((BU_x, TD_x), 1)
+        x = self.fc(x)
+        return F.log_softmax(x, dim=-1)
+
+    def forward_graphcl(self, data):
+        TD_x = self.TDrumorGCN(data)
+        BU_x = self.BUrumorGCN(data)
+        x = torch.cat((BU_x, TD_x), 1)
+        x = self.proj_head(x)
+        return x
+
+    def loss_graphcl(self, x1, x2, mean=True):
+        T = 0.5
+        batch_size, _ = x1.size()
+
+        x1_abs = x1.norm(dim=1)
+        x2_abs = x2.norm(dim=1)
+
+        sim_matrix = torch.einsum('ik,jk->ij', x1, x2) / torch.einsum('i,j->ij', x1_abs, x2_abs)
+        sim_matrix = torch.exp(sim_matrix / T)
+        pos_sim = sim_matrix[range(batch_size), range(batch_size)]
+        loss = pos_sim / (sim_matrix.sum(dim=1) - pos_sim)
+        loss = - torch.log(loss)
+        if mean:
+            loss = loss.mean()
+        return loss

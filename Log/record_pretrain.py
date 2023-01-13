@@ -32,8 +32,12 @@ if __name__ == '__main__':
             log = json.load(open(filepath, 'r', encoding='utf-8'))
             print('dataset:', log['dataset'])
             print('unsup dataset:', log['unsup dataset'])
+            print('tokenize mode:', log['tokenize mode'])
             print('unsup train size:', log['unsup train size'])
             print('batch size:', log['batch size'])
+            print('undirected:', log['undirected'])
+            if 'model' in log.keys():
+                print('model:', log['model'])
             print('n layers feat:', log['n layers feat'])
             print('n layers conv:', log['n layers conv'])
             print('n layers fc:', log['n layers fc'])

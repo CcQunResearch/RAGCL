@@ -5,18 +5,20 @@
 # @File    : word2vec.py
 # @Software: PyCharm
 # @Note    :
-from Main.pargs import pargs
 import os
 import os.path as osp
 import json
 import random
 import torch
 from gensim.models import Word2Vec
+from utils import word_tokenizer
 
 
 class Embedding():
-    def __init__(self, w2v_path):
+    def __init__(self, w2v_path, lang, tokenize_mode):
         self.w2v_path = w2v_path
+        self.lang = lang
+        self.tokenize_mode = tokenize_mode
         self.idx2word = []
         self.word2idx = {}
         self.embedding_matrix = self.make_embedding()
@@ -45,7 +47,7 @@ class Embedding():
 
     def sentence_word2idx(self, sen):
         sentence_idx = []
-        for word in sen:
+        for word in word_tokenizer(sen, self.lang, self.tokenize_mode):
             if (word in self.word2idx.keys()):
                 sentence_idx.append(self.word2idx[word])
             else:
@@ -67,14 +69,11 @@ class Embedding():
         return torch.LongTensor(y)
 
 
-def collect_sentences(label_dataset_path, unlabel_dataset_path, unsup_train_size):
-    train_path = osp.join(label_dataset_path, 'train', 'raw')
-    val_path = osp.join(label_dataset_path, 'val', 'raw')
-    test_path = osp.join(label_dataset_path, 'test', 'raw')
+def collect_sentences(label_source_path, unlabel_dataset_path, unsup_train_size, lang, tokenize_mode):
     unlabel_path = osp.join(unlabel_dataset_path, 'raw')
-
-    sentences = collect_label_sentences(train_path) + collect_label_sentences(val_path) \
-                + collect_label_sentences(test_path) + collect_unlabel_sentences(unlabel_path, unsup_train_size)
+    sentences = collect_label_sentences(label_source_path) + collect_unlabel_sentences(unlabel_path, unsup_train_size)
+    # sentences = collect_label_sentences(label_source_path)
+    sentences = [word_tokenizer(sentence, lang=lang, mode=tokenize_mode) for sentence in sentences]
     return sentences
 
 
@@ -105,5 +104,5 @@ def collect_unlabel_sentences(path, unsup_train_size):
 
 
 def train_word2vec(sentences, vector_size):
-    model = Word2Vec(sentences, vector_size=vector_size, window=5, min_count=5, workers=12, epochs=10, sg=1)
+    model = Word2Vec(sentences, vector_size=vector_size, window=5, min_count=5, workers=12, epochs=30, sg=1)
     return model

@@ -82,7 +82,8 @@ def mask_attr(batch_data, p, threshold):
         node_weights = node_aug_weights(aug_data_list[i].centrality)
         sel_mask = aug_node_weighted(node_weights, p, threshold)
         sel_mask[0] = True
-        mask_token = aug_data_list[i].x.mean(dim=0)
+        # mask_token = aug_data_list[i].x.mean(dim=0)
+        mask_token = torch.zeros_like(aug_data_list[i].x[0], dtype=torch.float)
         aug_data_list[i].x[sel_mask] = mask_token
     return Batch.from_data_list(aug_data_list).to(aug_data.x.device)
 
