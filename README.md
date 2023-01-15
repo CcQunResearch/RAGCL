@@ -6,6 +6,8 @@ Source code for RAGCL in paper:
 
 ## Run
 
+You need to compute node centrality with ```centrality.py``` before running the code.
+
 The code can be run in the following ways:
 
 ```shell script
