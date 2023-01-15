@@ -11,7 +11,7 @@ import shutil
 import jieba
 import nltk
 
-# nltk.download('punkt')
+nltk.download('punkt')
 from nltk.tokenize import MWETokenizer
 
 mwe_tokenizer = MWETokenizer([('<', '@', 'user', '>'), ('<', 'url', '>')], separator='')
