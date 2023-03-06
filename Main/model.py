@@ -410,37 +410,6 @@ class ResGCN_graphcl(ResGCN):
             loss = loss.mean()
         return loss
 
-    def contrastive_loss(self, x, y, device):
-        self.t = 0.3
-        self.nrlabel = 0
-
-        dot_matrix = torch.mm(x, x.t())  # [bs, bs]
-        x_norm = torch.norm(x, p=2, dim=1)  # [bs]
-        x_norm = x_norm.unsqueeze(1)  # [bs, 1])
-        norm_matrix = torch.mm(x_norm, x_norm.t())  # [bs, bs]
-
-        cos_matrix = (dot_matrix / norm_matrix) / self.t  # [bs, bs]
-        cos_matrix = torch.exp(cos_matrix)  # [bs, bs]
-        cos_matrix = cos_matrix - torch.diag_embed(torch.diag(cos_matrix))  # [bs, bs]
-
-        y_matrix = y.expand(len(y), len(y))  # [bs, bs]
-        neg_indices = torch.ne(y_matrix.t(), y_matrix).float()  # [bs, bs]
-        neg_matrix = cos_matrix * neg_indices  # [bs, bs]
-        sum_neg_vector = (torch.sum(neg_matrix, dim=1)).unsqueeze(1)  # [bs, 1]
-
-        y_matrix_mask_nrlabel = torch.where(y_matrix != self.nrlabel, y_matrix,
-                                            torch.ones(len(y), len(y)).long().to(device) * 100).to(device)  # [bs, bs]
-        pos_indices = torch.eq(y_matrix.t(), y_matrix_mask_nrlabel).float()  # [bs, bs]
-        pos_matrix = cos_matrix * pos_indices  # [bs, bs]
-
-        nrmask = torch.where(y != self.nrlabel, torch.ones(len(y)).bool().to(device), torch.zeros(len(y)).bool().to(device)).to(device)  # [bs]
-
-        div = pos_matrix / sum_neg_vector  # [bs, bs]
-        div = (torch.sum(div, dim=1)[nrmask]).unsqueeze(1)  # [bs, 1]
-        div = div / len(y)  # [bs, 1]
-        loss = -torch.sum(torch.log(div))
-        return loss
-
 
 ######################################################
 
