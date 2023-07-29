@@ -12,7 +12,11 @@ import os
 import json
 import torch
 from torch_geometric.data import Data, Batch
-from utils import write_json
+
+
+def write_json(dict, path):
+    with open(path, 'w', encoding='utf-8') as file_obj:
+        json.dump(dict, file_obj, indent=4, ensure_ascii=False)
 
 
 def get_root_index(data):

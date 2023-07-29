@@ -2,7 +2,7 @@
 
 Source code for RAGCL in paper: 
 
-**Adaptive Graph Contrastive Learning Approach for Rumor Detection**
+**Propagation Tree is not Deep: Adaptive Graph Contrastive Learning Approach for Rumor Detection**
 
 ## Run
 
