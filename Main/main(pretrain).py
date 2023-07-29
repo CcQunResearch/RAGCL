@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# @Time    : 2022/5/27 15:56
+# @Time    :
 # @Author  :
 # @Email   :
 # @File    : main(pretrain).py
